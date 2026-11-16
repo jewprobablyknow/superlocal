@@ -237,7 +237,9 @@ export function createRealRegistrations(config: LocalConfig, runtime: ReturnType
       const identity = { issuer: `imaps://${preset.imap.host}:${preset.imap.port}`, subject: imapUser,
         registrationId: createHash('sha256').update(JSON.stringify([endpoints, address, smtpUser])).digest('hex') }
       return { identity, email: address, imap: { ...preset.imap, user: imapUser, password },
-        ...(preset.smtp ? { smtp: { ...preset.smtp, user: smtpUser, password } } : {}), sentCopy: preset.sentCopy }
+        // A separate relay (for example SMTP2GO) can have its own password; the mail password is the default.
+        ...(preset.smtp ? { smtp: { ...preset.smtp, user: smtpUser,
+          password: typeof credentials.smtpPassword === 'string' && credentials.smtpPassword.length ? credentials.smtpPassword : password } } : {}), sentCopy: preset.sentCopy }
     }
     // The SDK builds the IMAP client; the host only substitutes its pinned endpoints for the browser's fields.
     const definition = pinned(base, (credentials, context) => {

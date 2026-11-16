@@ -40,6 +40,7 @@ export const builtInProviders: readonly ProviderDefinition[] = Object.freeze([
         { name: 'password', label: 'Mail password', type: 'password', required: true },
         { name: 'imapUsername', label: 'IMAP username (defaults to email)', type: 'text', required: false, advanced: true },
         { name: 'smtpUsername', label: 'SMTP username (defaults to email)', type: 'text', required: false, advanced: true },
+        { name: 'smtpPassword', label: 'SMTP password (defaults to mail password)', type: 'password', required: false, advanced: true },
       ],
       advancedNote: 'Server endpoints and required TLS are set by the selected host preset. Change presets in the local host configuration.' },
     create: (credentials, context) => new ImapProvider({ ...credentials, signal: context?.signal }),
