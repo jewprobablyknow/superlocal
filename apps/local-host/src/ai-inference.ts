@@ -46,7 +46,9 @@ function httpsUrl(value: unknown): value is string {
   if (!label(value, 2048) || /[?#\\]/.test(value)) return false
   try {
     const url = new URL(value)
-    return url.protocol === 'https:' && !!url.hostname && !url.username && !url.password && url.href === value
+    // Plain HTTP is accepted only for a loopback bridge on this machine (for example scripts/claude-bridge.ts).
+    const loopback = url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+    return (url.protocol === 'https:' || loopback) && !!url.hostname && !url.username && !url.password && url.href === value
   } catch { return false }
 }
 
