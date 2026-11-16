@@ -60,7 +60,21 @@ async function slot<T>(work: () => Promise<T>): Promise<T> {
   try { return await work() } finally { running--; waiting.shift()?.() }
 }
 
-const effortFor = (value: unknown) => value === 'high' ? 'high' : value === 'medium' ? 'medium' : 'low'
+// The app's triage prompt was tuned for OpenAI models. Claude follows it well but often skips the
+// evidence entry for `type`, which the app then rejects (AI_EVIDENCE_REQUIRED). This checklist
+// restates the app's own validation rules; it does not loosen them.
+const TRIAGE_CHECKLIST = `
+
+EVIDENCE CHECKLIST (the answer is rejected if any item is missing). Before you output, add one evidence entry, with an exact quote from the source, for EACH of these that applies:
+- type is anything other than "unknown" or "other" → an entry with field "type" (always required for notification, conversation, invitation, newsletter, marketing, etc.).
+- response is "needed" → an entry with field "response".
+- actions is not empty → an entry with field "action".
+- task is "required" → an entry with field "task" that quotes an INCOMING message.
+- urgency is "immediate" or "deadline" → an entry with field "urgency".
+- risk is "unsolicited", "spam_suspected" or "phishing_suspected" → an entry with field "risk".
+If you cannot quote evidence for a value, choose the value that needs none (for example type "other", empty actions).`
+
+const effortFor =(value: unknown) => value === 'high' ? 'high' : value === 'medium' ? 'medium' : 'low'
 
 function childEnv(): Record<string, string> {
   const env: Record<string, string> = {}
@@ -80,7 +94,7 @@ async function runClaude(request: Record<string, any>, signal: AbortSignal): Pro
   if (!prompt) return { status: 400, body: { error: { message: 'empty input' } } }
   const args = [
     '-p', '--output-format', 'json', '--model', String(request.model),
-    '--system-prompt', String(request.instructions ?? ''),
+    '--system-prompt', String(request.instructions ?? '') + (request.text?.format?.name === 'triage_result_v2' ? TRIAGE_CHECKLIST : ''),
     '--tools', '', '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence',
     '--effort', effortFor(request.reasoning?.effort),
   ]
@@ -104,6 +118,11 @@ async function runClaude(request: Record<string, any>, signal: AbortSignal): Pro
       return { status, body: { error: { message: status === 401 ? 'Claude login required: run `claude auth login`' : 'Claude request failed' } } }
     }
     const output = data.structured_output !== undefined ? JSON.stringify(data.structured_output) : String(data.result ?? '')
+    // Opt-in only: the dump contains mail content.
+    if (process.env.CLAUDE_BRIDGE_DEBUG_DIR) {
+      mkdirSync(process.env.CLAUDE_BRIDGE_DEBUG_DIR, { recursive: true, mode: 0o700 })
+      writeFileSync(join(process.env.CLAUDE_BRIDGE_DEBUG_DIR, `${Date.now()}.json`), JSON.stringify({ prompt, instructions: request.instructions, output, raw: data }, null, 2), { mode: 0o600 })
+    }
     const u = data.usage ?? {}
     const cached = u.cache_read_input_tokens ?? 0, written = u.cache_creation_input_tokens ?? 0
     const input = (u.input_tokens ?? 0) + cached + written, out = u.output_tokens ?? 0
@@ -144,9 +163,17 @@ const server = Bun.serve({
 console.log(`[claude-bridge] Listening on http://127.0.0.1:${server.port} (concurrency ${CONCURRENCY})`)
 
 // --with-app: also run the Superlocal app and stop both together.
+// Same steps as `bun run start`, but the launcher is a direct child, so stop signals reach it
+// (a package-script shell does not forward a SIGINT that comes from outside a terminal).
 if (process.argv.includes('--with-app')) {
-  const app = Bun.spawn(['bun', '--no-env-file', 'run', 'start'], { cwd: ROOT_DIR, stdio: ['inherit', 'inherit', 'inherit'] })
-  const stop = () => { try { app.kill('SIGINT') } catch { /* gone */ } }
+  const bun = process.execPath
+  const build = Bun.spawnSync([bun, '--no-env-file', 'run', '--cwd', join(ROOT_DIR, 'apps', 'web'), 'build'], { stdio: ['ignore', 'inherit', 'inherit'] })
+  if (build.exitCode !== 0) { server.stop(true); process.exit(build.exitCode ?? 1) }
+  const app = Bun.spawn([bun, '--no-env-file', join(ROOT_DIR, 'scripts', 'dev.ts'), '--built'], { cwd: ROOT_DIR, stdio: ['inherit', 'inherit', 'inherit'] })
+  const stop = () => {
+    try { app.kill('SIGINT') } catch { /* gone */ }
+    setTimeout(() => { try { app.kill('SIGKILL') } catch { /* gone */ } process.exit(1) }, 10_000).unref()
+  }
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)
   app.exited.then(code => { server.stop(true); process.exit(code ?? 0) })
